@@ -3,8 +3,11 @@ import os
 import sys
 from time import sleep
 from typing import Literal
+from colorama import init, Fore, Back, Cursor
 from hanoilib import HenoiOrderFail, HenoiStepOver, Movement, Tower
 from hanoilib.show import show
+
+init(autoreset=True)
 
 TRUE_SET = {
     'true',
@@ -46,7 +49,7 @@ class Handler:
                     return self.error('no tower to move')
                 if from_ not in {'a', 'b', 'c'} or to not in {'a', 'b', 'c'}:
                     return self.error('only a, b and c are postions')
-                move = Movement(from_, to) # type: ignore
+                move = Movement(ord(from_)-97, ord(to)-97) # type: ignore
                 try:
                     self.tower.move(move)
                 except HenoiOrderFail:
@@ -103,12 +106,12 @@ class Handler:
                             sleep(5/time)
                     sys.stdout.write("\033[F")
                     sys.stdout.write("\033[K")
-                    print('[Info] finish')
+                    self.info('finish')
                     return True
                 except ValueError:
                     return self.error('time should be int or float')
                 except KeyboardInterrupt:
-                    print('[Info] stop going')
+                    self.info('stop going')
                     return False
             case _ :
                 return self.error('no such cmd')
@@ -126,10 +129,16 @@ class Handler:
     @staticmethod
     def error(log: str) -> Literal[False]:
         '''show error'''
-        print(f'[Error] {log}')
+        print(f'{Fore.RED}[Error] {log}{Fore.RESET}')
         return False
 
+    @staticmethod
+    def info(log: str) -> Literal[True]:
+        '''show info'''
+        print(f'{Fore.GREEN}[Info] {log}{Fore.RESET}')
+        return True
 
+SEP = '-'*32
 
 def main():
     # pylint: disable=broad-exception-caught
@@ -137,26 +146,29 @@ def main():
     while True:
         try:
             handler.match_command(input('>>> '))
-        except Exception as exc:
-            print(f'[Error] {exc.args}')
-        except KeyboardInterrupt:
-            leave = input('\n\033[F\033[K--------------------------------\n'
+        except (KeyboardInterrupt, EOFError):
+            leave = input(f'{Fore.CYAN}\n\033[F\033[K{SEP}\n'
                             '\033[K>>> \n'
-                            'Do you want to leave? [yes / no]\033[F\033[4C')
+                            f'Do you want to leave? [yes / no]\033[F{Cursor.FORWARD(4)}{Fore.RESET}')
             while True:
                 if leave in FALSE_SET:
-                    print('Do you want to leave?\n--------------------------------')
+                    print(f'{Fore.CYAN}Do you want to leave?\n{SEP}{Fore.RESET}')
                     break
                 if leave in TRUE_SET:
-                    print('Thank for using the program, good bye!')
+                    print(f'{Fore.BLUE}Thank for using the program, good bye!')
                     sys.exit()
-                leave = input('\033[2F\033[K--------------------------------\n'
+                leave = input(f'{Fore.CYAN}\033[2F\033[K{SEP}\n'
                               '\033[K>>> \n'
-                              'Do you want to leave? [yes / no]\033[F\033[4C')
+                              f'Do you want to leave? [yes / no]\033[F{Cursor.FORWARD(4)}{Fore.RESET}')
+        except Exception as exc:
+            Handler.error(f'{exc.args} {exc.__class__.__name__}')
 
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print(f'{Fore.BLUE}\nThank for using the program, good bye!')
 
 #end
