@@ -5,4 +5,5 @@ desktop.ini
 .pyc
 .adl
 .unc
+.vscode
 __pycache__
