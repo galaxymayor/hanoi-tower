@@ -1,4 +1,4 @@
-from hanoilib.show import show
+from hanoilib._show import show
 from hanoilib import Tower
 # import time
 

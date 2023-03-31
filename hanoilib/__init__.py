@@ -71,51 +71,37 @@ class Plate(int):
         return super().__new__(cls, self)
 
 
-@dataclass
-class Stack:
+class Stack(list[Plate]):
     '''A Stack is a container of Plate'''
     name: str
-    _plates: list[Plate]
-    _position: Position = field(init=False)
 
+    _position: Position = field(init=False)
     def __init__(self, plates: list[Plate] | None = None, name: str = '') -> None:
-        if plates is None:
-            plates = []
-        self._check(plates)
-        self._plates = plates
+        plates = plates or []
+        Stack._check(plates)
+        super().__init__(plates)
         self.name = name
 
     @staticmethod
     def _check(plates: list[Plate]) -> None:
         if not plates:
             return
-        plates_ = plates[1:]
-        for order, plate in enumerate(plates_):
-            last = plates[order]
-            if plate >= last:
-                raise HenoiOrderFail(f'{plate} >= {last}')
-
-    def __repr__(self) -> str:
-        return f'<{self.name} : {self._plates}>'
-
-    def __getitem__(self, i: int) -> Plate:
-        return self._plates[i]
-
-    def __len__(self) -> int:
-        return self._plates.__len__()
-
-    def __contains__(self, item) -> bool:
-        return item in self._plates
+        if any(a <= b for a, b in zip(plates, plates[1:])):
+            raise HenoiOrderFail('plates should be consecutively decreasing.')
 
     def push(self, plate: Plate) -> None:
         '''push a plate to back.'''
-        if self._plates and plate >= self._plates[-1]:
-            raise HenoiOrderFail(f'{plate} >= {self._plates[-1]}')
-        self._plates.append(plate)
+        if self and plate >= self[-1]:
+            raise HenoiOrderFail(f'{plate} >= {self[-1]}')
+        self.append(plate)
 
-    def pop(self) -> Plate:
-        '''take a plate out.'''
-        return self._plates.pop()
+    def copy(self) -> Self:
+        return self.__class__(self, self.name)
+
+
+    def __repr__(self) -> str:
+        return f'<{self.name} : {super().__repr__()}>'
+
 
 
 class StackStart(Stack):
@@ -144,6 +130,10 @@ class Movement(tuple[Position, Position]):
 
     def __repr__(self) -> str:
         return f'{Pos._to_chr(self[0])} -> {Pos._to_chr(self[1])}'
+
+    def reverse(self) -> Self:
+        '''opposite directed movement'''
+        return Movement(self[1], self[0])
 
     @staticmethod
     def eval(step: int, level: int, *,
@@ -175,7 +165,7 @@ class Positions(Protocol):
         '''Add item into the end'''
 
 
-@dataclass
+@dataclass(slots=True)
 class Tower:
     # pylint: disable=protected-access
     '''A Tower contains three henoi stacks.'''
@@ -186,17 +176,16 @@ class Tower:
     plates_pos: Positions = field(init=False)
 
     def __post_init__(self) -> None:
-        # if len(self.start)+len(self.tmp)+len(self.end) not in st
         pos_l = bytearray(b'\x80') * \
             (len(self.start)+len(self.temp)+len(self.end))
         try:
-            for plate in self.start._plates:
+            for plate in self.start:
                 # assert pos_l[-plate] == 128
                 pos_l[-plate] = 0
-            for plate in self.temp._plates:
+            for plate in self.temp:
                 # assert pos_l[-plate] == 128
                 pos_l[-plate] = 1
-            for plate in self.end._plates:
+            for plate in self.end:
                 # assert pos_l[-plate] == 128
                 pos_l[-plate] = 2
         except KeyError as exc:
@@ -207,8 +196,8 @@ class Tower:
 
     def move(self, movement: Movement) -> Self:
         '''Move a plate, if possible'''
-        stack_fr = self.match_pos(movement[0])
-        stack_to = self.match_pos(movement[1])
+        stack_fr = self[movement[0]]
+        stack_to = self[movement[1]]
         plate = stack_fr.pop()
         try:
             stack_to.push(plate)
@@ -218,9 +207,8 @@ class Tower:
         self.plates_pos[-plate] = movement[1]
         return self
 
-    def eval(self) -> Generator[Movement, None, None]:
+    def eval(self) -> 'MoveGen':
         '''eviluate next steps'''
-        # pylint: disable=unsubscriptable-object
         tower_tall = len(self.start)+len(self.temp)+len(self.end)
         for order, pos in enumerate(self.plates_pos):
             if pos != 2:
@@ -232,10 +220,10 @@ class Tower:
         move_list: list[Movement] = []
         add_move = move_list.append
         for order, pos in enumerate(self.plates_pos[index:], start=index):
-            if ((not self.match_pos(want_p)._plates) or
-                    ((tower_tall - order) < self.match_pos(want_p)[-1])
+            if ((not self[want_p]) or
+                    ((tower_tall - order) < self[want_p][-1])
                 ) \
-                    and (tower_tall - order) == self.match_pos(pos)[-1]:
+                    and (tower_tall - order) == self[pos][-1]:
                 add_move(Movement(pos, want_p))
                 break
             add_move(Movement(pos, want_p))
@@ -250,9 +238,9 @@ class Tower:
     def copy(self) -> Self:
         '''copy self'''
         return Tower(
-            StackStart(self.start._plates.copy(), self.start.name),
-            StackTemp(self.temp._plates.copy(), self.temp.name),
-            StackEnd(self.end._plates.copy(), self.end.name),
+            self.start.copy(),
+            self.temp.copy(),
+            self.end.copy(),
             name=self.name
         )
 
@@ -262,15 +250,9 @@ class Tower:
     def __repr__(self) -> str:
         return str.join('', map(Pos._to_chr, self.plates_pos))
 
-    def match_pos(self, p: Position, /) -> Stack:
+    def __getitem__(self, p: Position, /) -> Stack:
         '''return stack at the position'''
-        match p:
-            case 0:
-                return self.start
-            case 1:
-                return self.temp
-            case 2:
-                return self.end
+        return (self.start,  self.temp, self.end)[p]
 
     @staticmethod
     def new(step: int, level: int, *, start_pos: Position = 0, end_pos: Position = 2,
@@ -296,9 +278,9 @@ def match_stack_type(p: Position, /) -> Type[Stack]:
     raise HenoiPositionError()
 
 
-# MOVES: tuple[tuple[Position, Position], ...] = (
-#     (0, 1), (2, 0), (1, 2)
-# )
+MOVES: tuple[tuple[Position, Position], ...] = (
+    (0, 1), (2, 0), (1, 2)
+)
 
 
 def _reverse(pos: Position) -> Position:
@@ -342,9 +324,12 @@ def step_posible(step: int, level: int) -> bool:
     return pow(2, level) > step
 
 
+MoveGen = Generator[Movement, None, None]
+
+
 def _stepfy(expected_moves: list[Movement],
             plate_quantity: int,
-            start_index: int) -> Generator[Movement, None, None]:
+            start_index: int) -> MoveGen:
     top_level = plate_quantity-len(expected_moves)-start_index
     for index, move in enumerate(expected_moves, top_level):
         if move[0] == move[1]:
@@ -369,9 +354,9 @@ def _move(step: int, level: int, *, start_pos: Position = 0, end_pos: Position =
     # pylint: disable=invalid-name
     level_reverse = level % 2
     plate_direction = last_zero(step) % 2
-    # from_, to = MOVES[step % 3]
-    from_: Position = (step^3)%3 # type: ignore
-    to: Position = ((step^3)-2)%3 # type: ignore
+    from_, to = MOVES[step % 3]
+    # from_: Position = (step^3)%3 # type: ignore
+    # to: Position = ((step^3)-2)%3 # type: ignore
     if level_reverse:
         from_, to = _reverse(from_), _reverse(to)
     if plate_direction:
@@ -423,13 +408,12 @@ def _new_tower(step: int, level: int, *, start_pos: Position = 0, end_pos: Posit
             sep = 1
 
     for char, plate in zip(push_str[1:], plates):
-        match char:
-            case 0:
-                a_add(plate)
-            case 1:
-                b_add(plate)
-            case 2:
-                c_add(plate)
+        if char == 0:
+            a_add(plate)
+        elif char == 1:
+            b_add(plate)
+        elif char == 2:
+            c_add(plate)
 
     return Tower(StackStart(from_, stack_names[0]),
                  StackTemp(temp, stack_names[1]),
@@ -442,15 +426,16 @@ def _new_tower(step: int, level: int, *, start_pos: Position = 0, end_pos: Posit
 
 def __test() -> None:
     '''Write test here'''
-    state = _new_tower(27, 5, start_pos=0,)
+    state = _new_tower(0, 5)
     print(state)
     # state += Movement('b', 'c')
-    state += Movement(0, 2)
-    print(state)
-    for move in state.eval():
-        print(move)
-    # for i in range(7):
-    #     print(_move(i,3,start_pos='b',end_pos= 'a'))
+    # state += Movement(0, 2)
+    # print(state)
+    # for move in state.eval():
+    #     print(move)
+    #     state.move(move)
+    for i in range(7):
+        print(_move(i,3,start_pos=2,end_pos= 1))
 
 
 if __name__ == '__main__':
