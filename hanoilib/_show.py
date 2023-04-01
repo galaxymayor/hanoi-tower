@@ -15,8 +15,8 @@ class TowerInfo(tuple[int, int, bool]):
     unit_width: int
     half: bool
 
-    def __new__(cls, height: int, width: int, half: bool):
-        return super().__new__(cls, (height, width, half))
+    def __new__(cls, height: int, unit_width: int, half: bool):
+        return super().__new__(cls, (height, unit_width, half))
 
     def __getattribute__(self, __name: str):
         if __name == 'height':
@@ -100,22 +100,15 @@ class FutureMoves:
 
     def __next__(self) -> Movement:
         '''Read the first Movement'''
-        try:
-            if not self.known:
-                if self.unknown is None:
-                    raise HenoiStepOver
-                try:
-                    self.known.append(next(self.unknown))
-                except StopIteration as exc:
-                    self.unknown = None
-                    raise HenoiStepOver from exc
+        if self.known:
             return self.known.pop(0)
-        except (IndexError, HenoiStepOver) as exc:
+        if not self.unknown:
+            raise StopIteration
+        try:
+            return next(self.unknown)
+        except StopIteration as exc:
+            self.unknown = None
             raise StopIteration from exc
-
-    def __iter__(self) -> Iterator[Movement]:
-        '''Iterate the Movements'''
-        return self
 
     def __bool__(self) -> bool:
         '''Check if there is a Movement'''
@@ -294,13 +287,14 @@ def draw_stack(
 ) -> Lines:
     '''Draw a stack'''
 
-    resault = Lines([
-        *([draw_piller(info[1], info[2], piller_color=piller_color)]
-          * (info[0]-len(stack))),
-        *[draw_plate(plate, info[1], info[2],
-                     plate_color=plate_color,
-                     show_plate_level=show_plate_level)
-          for plate in reversed(stack)]])
+    resault = Lines(chain(
+        [draw_piller(
+            info[1], info[2], piller_color=piller_color)] * (info[0]-len(stack)),
+        (draw_plate(plate, info[1], info[2],
+                    plate_color=plate_color,
+                    show_plate_level=show_plate_level)
+         for plate in reversed(stack))
+    ))
     resault.set_width(info[1])
 
     return resault
@@ -311,9 +305,10 @@ def draw_stack_from_given_repr(
     '''Draw a stack from a given representation'''
     if length is None:
         length = len(stack)
-    resault = Lines([
-        *([reprs[0]]*(length-len(stack))),
-        *[reprs[plate] for plate in reversed(stack)]])
+    resault = Lines(chain(
+        [reprs[0]]*(length-len(stack)),
+        (reprs[plate] for plate in reversed(stack))
+    ))
     resault.set_width(width)
 
     return resault

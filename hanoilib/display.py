@@ -1,5 +1,6 @@
 '''The module contains the class Show to show the tower'''
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from itertools import chain
 from typing import Literal
 from colorama import Back, Cursor
 from . import HenoiStepOver, Plate, Position, Tower, Movement
@@ -30,6 +31,21 @@ class Edit:
     col: int | None
     new: tuple[Movement, bool | None] | Plate | None = None
 
+@dataclass(slots=True)
+class TowerEdit(Edit):
+    '''The class save a change in the tower'''
+    zone: Literal['t'] = field(default='t', init=False)
+    row: int
+    col: int
+    new: Plate | None = None
+
+@dataclass(slots=True)
+class EvalEdit(Edit):
+    '''The class save a change in the evaluation'''
+    zone: Literal['e'] = field(default='e', init=False)
+    row: int | None = field(default=None, init=True)
+    col: None = field(default=None, init=False)
+    new: tuple[Movement, bool | None] | None = None
 
 class Show:
     '''The class contains configurations and methods to save shown tower string and\
@@ -37,14 +53,18 @@ class Show:
     evaluations: FutureMoves
     config: ShowConfiguration
     __tower: Tower
-    editions: list[Edit]
+    tower_editions: list[TowerEdit]
+    eval_editions: list[EvalEdit]
     plate_repr: list[str]
+    tower_info: TowerInfo
 
     def __init__(self, tower: Tower, configuration: ShowConfiguration) -> None:
         self.__tower = tower
         self.evaluations = evaluate(tower, len(tower.plates_pos))
         self.config = configuration
-        self.editions = []
+        self.tower_editions = []
+        self.eval_editions = []
+        self.tower_info = TowerInfo.eval_tower_info(tower, configuration.width)
 
     @property
     def tower_length(self) -> int:
@@ -62,8 +82,7 @@ class Show:
         if self.config.eval:
             lines = Lines(f'{self.config.border_color}  {Back.RESET}'.join(line)
                           for line in zip(self.tower_lines, self.evaluation_lines))
-            lines.set_width(self.tower_lines.width()+2 +
-                            self.evaluation_lines.width())
+            lines.set_width(self.tower_info.unit_width*3 + 2 + 14)
         else:
             lines = self.tower_lines
         line_width = lines.width()
@@ -80,8 +99,11 @@ class Show:
     def tower_lines(self) -> Lines:
         '''Get the lines to display the tower'''
         cfg = self.config
-        info = TowerInfo.eval_tower_info(self.__tower, cfg.width)
+        info = self.tower_info = TowerInfo.eval_tower_info(
+            self.__tower, cfg.width
+        )
         self.generate_repr()
+        self.tower_editions.clear()
         return draw_tower_from_given_repr(
             self.__tower,
             self.plate_repr,
@@ -98,6 +120,7 @@ class Show:
         evaluate_lines.append(
             f'{self.config.border_color}{" "*14}{Back.RESET}')
         evaluate_lines.append('  next steps  ')
+        self.eval_editions.clear()
         return evaluate_lines
 
     def __str__(self) -> str:
@@ -122,22 +145,26 @@ class Show:
         if self.evaluations.calculate_till(1):
             self.move(self.evaluations.known[0])
         else:
-            self.editions.append(Edit('e', 0, None, None))
+            self.eval_editions.append(EvalEdit(0, None))
             raise HenoiStepOver
 
     def read_editions(self) -> str:
         '''Read the editions'''
-        resault = ''.join(self.decode_edition(edit) for edit in self.editions)
-        self.editions.clear()
-        return f'\033[s{resault}\x1b[0m\033[u'
+        resault = f'''\033[s{"".join(chain(
+            (self._decode_tower_edition(edit) for edit in self.tower_editions),
+            (self._decode_evaluation_edition(edit) for edit in self.eval_editions),
+        ))}\x1b[0m\033[u'''
+        self.tower_editions.clear()
+        self.eval_editions.clear()
+        return resault
 
     def edit_tower(self, move: Movement) -> None:
         '''Add an edition'''
-        edit = self.editions.append
+        edit = self.tower_editions.append
         fr_row, to_row = map(lambda p: self.tower_length-self.get_stack_len(p),
                              move)
-        edit(Edit('t', fr_row, move[0], None))
-        edit(Edit('t', to_row-1, move[1], self.__tower[move[0]][-1]))
+        edit(TowerEdit(fr_row, move[0], None))
+        edit(TowerEdit(to_row-1, move[1], self.__tower[move[0]][-1]))
 
     def edit_evaluation(self, move: Movement) -> None:
         '''Add an edition to the evaluation part'''
@@ -146,9 +173,9 @@ class Show:
         except StopIteration:
             self.evaluations.insert(move.reverse())
             if self.config.eval:
-                self.editions.append(Edit('e', 0, None, (move.reverse(), True)))
+                self.eval_editions.append(EvalEdit(0, (move.reverse(), True)))
             return
-        edit = self.editions.append
+        edit = self.eval_editions.append
         state: Literal[0, 1, 2]  # 0 for same, 1 for unnecessary, 2 for other
         if move == next_eval:
             state = 0
@@ -167,64 +194,50 @@ class Show:
         ev_len = self.evaluations.calculate_till(self.tower_length+1)
 
         if not ev_len:
-            edit(Edit('e', 0, None, None))
+            edit(EvalEdit(0, None))
             return
 
         if ev_len == 1:
-            edit(Edit('e', 0, None, (self.evaluations.known[0], True)))
-            edit(Edit('e', None, None, None))
+            edit(EvalEdit(0, (self.evaluations.known[0], True)))
+            edit(EvalEdit(None, None))
             return
 
-        edit(Edit('e', 0, None, (self.evaluations.known[0], None)))
+        edit(EvalEdit(0, (self.evaluations.known[0], None)))
         if state != 1:
             end = ev_len <= self.tower_length
             till = min(ev_len, self.tower_length)-1
             for ev_move in self.evaluations.known[1:till]:
-                edit(Edit('e', None, None, (ev_move, None)))
-            edit(Edit('e', None, None, (self.evaluations.known[till], end)))
+                edit(EvalEdit(None, (ev_move, None)))
+            edit(EvalEdit(None, (self.evaluations.known[till], end)))
             if end and ev_len < self.tower_length:
-                edit(Edit('e', None, None, None))
+                edit(EvalEdit(None, None))
 
-    def decode_edition(self, edit: Edit) -> str:
-        '''Decode the change'''
-        if edit.zone == 't':
-            return self._decode_tower_edition(edit)
-        return self._decode_evaluation_edition(edit)
-
-    def _decode_tower_edition(self, edit: Edit) -> str:
+    def _decode_tower_edition(self, edit: TowerEdit) -> str:
         '''Decode a tower edition'''
-        match edit:
-            case Edit(_, int(row), int(col), value):
-                # assert isinstance(value, Plate) or value is None
-                unit_width = self.tower_lines.width()//3
-                padx = self.config.border*2
-                pady = self.config.border
-                x_pos = col*unit_width+padx
-                y_pos = row+pady
+        # assert isinstance(value, Plate) or value is None
+        unit_width = self.tower_info.unit_width
+        padx = self.config.border*2
+        pady = self.config.border
+        x_pos = edit.col*unit_width+padx
+        y_pos = edit.row+pady
 
-                if value is None:
-                    value = self.plate_repr[0]
-                else:
-                    value = self.plate_repr[value] # type: ignore
-            case _:
-                raise ValueError('Invalid edit')
+        value = self.plate_repr[edit.new or 0]
 
         return f'{Cursor.POS(x_pos+1, y_pos+1)}{value}'
 
-    def _decode_evaluation_edition(self, edit: Edit) -> str:
+    def _decode_evaluation_edition(self, edit: EvalEdit) -> str:
         '''Decode an evaluation edition'''
-        match edit:
-            case Edit(_, row, None, tuple((move, end))):
-                value = f'  {move}{" "*6 if end is None else " @    " if end else " ...  "}'
-            case Edit(_, row, None, None):
-                value = ' '*14
-            case _:
-                raise ValueError('Invalid edit')
+
+        if new := edit.new:
+            value = f'  {new[0]}{" "*6 if new[1] is None else " @    " if new[1] else " ...  "}'
+        else:
+            value = ' '*14
+
         padx = self.config.border*2
         pady = self.config.border
         pos_str = \
-            Cursor.POS(self.tower_lines.width()+padx*2+1,
-                       row+pady+1) if row is not None else Cursor.DOWN(1)+Cursor.BACK(14)
+            Cursor.POS(self.tower_info.unit_width*3+padx*2+1,
+                       edit.row+pady+1) if edit.row is not None else Cursor.DOWN(1)+Cursor.BACK(14)
         return f'{pos_str}{value}'
 
     def generate_repr(self) -> None:

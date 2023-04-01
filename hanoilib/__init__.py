@@ -269,27 +269,18 @@ class Tower:
 
 def match_stack_type(p: Position, /) -> Type[Stack]:
     '''return correct type of stack'''
-    if p == 0:
-        return StackStart
-    if p == 1:
-        return StackTemp
-    if p == 2:
-        return StackEnd
-    raise HenoiPositionError()
+    if p > 2:
+        raise HenoiPositionError()
+    return STACK_TYPES[p]
 
+STACK_TYPES = (StackStart, StackTemp, StackEnd)
 
 MOVES: tuple[tuple[Position, Position], ...] = (
     (0, 1), (2, 0), (1, 2)
 )
 
 
-def _reverse(pos: Position) -> Position:
-    '''Positon b <-> c'''
-    if pos == 1:
-        return 2
-    if pos == 2:
-        return 1
-    return 0
+REVERSE_B_C = (0, 2, 1)
 
 
 def last_zero(i: int) -> int:
@@ -355,10 +346,8 @@ def _move(step: int, level: int, *, start_pos: Position = 0, end_pos: Position =
     level_reverse = level % 2
     plate_direction = last_zero(step) % 2
     from_, to = MOVES[step % 3]
-    # from_: Position = (step^3)%3 # type: ignore
-    # to: Position = ((step^3)-2)%3 # type: ignore
     if level_reverse:
-        from_, to = _reverse(from_), _reverse(to)
+        from_, to = REVERSE_B_C[from_], REVERSE_B_C[to]
     if plate_direction:
         from_, to = to, from_
     pos_l = _change_pos(start_pos, other(
@@ -391,7 +380,7 @@ def _new_tower(step: int, level: int, *, start_pos: Position = 0, end_pos: Posit
     step_str = f'{step:b}'.zfill(level+1)
     push_str: Positions = \
         bytearray((start_pos, end_pos)) if step_str[1] == '1' else \
-        bytearray(end_pos, start_pos)  # type: ignore
+        bytearray((end_pos, start_pos))  # type: ignore
     push = push_str.append
     sep = 1
 
