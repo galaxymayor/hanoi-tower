@@ -1,7 +1,9 @@
 '''cui henoi'''
 from abc import ABC, abstractmethod
+# from multiprocessing import Process, Queue, Pipe, connection
+from time import perf_counter, sleep
 import os
-from time import sleep
+from sys import stdout
 from typing import Literal
 from colorama import Fore, Back, Cursor
 from hanoilib import HenoiOrderFail, HenoiStepOver, Movement, Tower
@@ -9,7 +11,6 @@ from hanoilib.display import ShowConfiguration, Show
 from true_false import true_false
 
 # init(autoreset=True)
-
 
 class Handler(ABC):
     '''To handle the environment'''
@@ -167,16 +168,20 @@ class DefaultHandler(Handler):
         return True
 
     def play(self, time: float) -> bool:
+        if self.show is None:
+            return self.error('no tower to play')
         try:
             time = float(time)
+            time_start = perf_counter()
             if time:
                 while self.next():
                     sleep(5/time)
             else:
-                while self.next():
-                    ...
+                self.show.fast_play(stdout.write)
+            time_end = perf_counter()
             print("\033[F\033[K", end='')
             self.info('finish')
+            self.info(f'time: {time_end-time_start:.3f}s')
             return True
         except ValueError:
             return self.error('time should be int or float')

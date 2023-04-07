@@ -2,9 +2,9 @@
 
 # PART import
 
-
+from collections import deque
 from dataclasses import dataclass, field
-from typing import Generator, Iterator, Literal, Protocol, Self, Type, overload
+from typing import Generator, Iterable, Iterator, Literal, Protocol, Self, Type, overload
 
 
 # PART exception
@@ -60,6 +60,8 @@ class Pos:
             raise HenoiPositionError('only 0, 1, 2 is valid')
         return resault  # type: ignore
 
+# Plate = int
+
 
 class Plate(int):
     '''A henoi plate'''
@@ -71,23 +73,32 @@ class Plate(int):
         return super().__new__(cls, self)
 
 
-class Stack(list[Plate]):
+class Stack(deque[Plate]):
     '''A Stack is a container of Plate'''
     name: str
 
     _position: Position = field(init=False)
-    def __init__(self, plates: list[Plate] | None = None, name: str = '') -> None:
+
+    def __init__(self, plates: Iterable[Plate] | None = None,
+                 name: str = '', maxlen: int | None = None) -> None:
         plates = plates or []
         Stack._check(plates)
-        super().__init__(plates)
+        super().__init__(plates, maxlen=maxlen)
         self.name = name
 
     @staticmethod
-    def _check(plates: list[Plate]) -> None:
+    def _check(plates: Iterable[Plate]) -> None:
         if not plates:
             return
-        if any(a <= b for a, b in zip(plates, plates[1:])):
-            raise HenoiOrderFail('plates should be consecutively decreasing.')
+        # if any(a <= b for a, b in zip(plates, plates[1:])):
+        #     raise HenoiOrderFail('plates should be consecutively decreasing.')
+        iterator = iter(plates)
+        prev_item = next(iterator)
+        for item in iterator:
+            if item >= prev_item:
+                raise HenoiOrderFail(
+                    'plates should be consecutively decreasing.')
+            prev_item = item
 
     def push(self, plate: Plate) -> None:
         '''push a plate to back.'''
@@ -96,12 +107,11 @@ class Stack(list[Plate]):
         self.append(plate)
 
     def copy(self) -> Self:
+        '''copy a stack'''
         return self.__class__(self, self.name)
-
 
     def __repr__(self) -> str:
         return f'<{self.name} : {super().__repr__()}>'
-
 
 
 class StackStart(Stack):
@@ -169,6 +179,7 @@ class Positions(Protocol):
 class Tower:
     # pylint: disable=protected-access
     '''A Tower contains three henoi stacks.'''
+    _stacks: tuple[Stack, Stack, Stack] = field(init=False)
     start: StackStart = field(default_factory=StackStart)
     temp: StackTemp = field(default_factory=StackTemp)
     end: StackEnd = field(default_factory=StackEnd)
@@ -176,6 +187,11 @@ class Tower:
     plates_pos: Positions = field(init=False)
 
     def __post_init__(self) -> None:
+        self._stacks = (self.start, self.temp, self.end)
+        self.update_plates_pos()
+
+    def update_plates_pos(self) -> None:
+        '''update the plates_pos'''
         pos_l = bytearray(b'\x80') * \
             (len(self.start)+len(self.temp)+len(self.end))
         try:
@@ -207,6 +223,10 @@ class Tower:
         self.plates_pos[-plate] = movement[1]
         return self
 
+    def _move_without_check(self, movement: Movement) -> None:
+        self[movement[1]].append(plate := self[movement[0]].pop())
+        self.plates_pos[-plate] = movement[1]
+
     def eval(self) -> 'MoveGen':
         '''eviluate next steps'''
         tower_tall = len(self.start)+len(self.temp)+len(self.end)
@@ -217,6 +237,8 @@ class Tower:
                 break
         else:
             raise HenoiStepOver('finish')
+        if all((a == b) for a, b in zip(self.plates_pos, self.plates_pos[1:])):
+            return _moves(tower_tall, start_pos=self.plates_pos[0], end_pos=2)
         move_list: list[Movement] = []
         add_move = move_list.append
         for order, pos in enumerate(self.plates_pos[index:], start=index):
@@ -252,7 +274,7 @@ class Tower:
 
     def __getitem__(self, p: Position, /) -> Stack:
         '''return stack at the position'''
-        return (self.start,  self.temp, self.end)[p]
+        return self._stacks[p]
 
     @staticmethod
     def new(step: int, level: int, *, start_pos: Position = 0, end_pos: Position = 2,
@@ -272,6 +294,7 @@ def match_stack_type(p: Position, /) -> Type[Stack]:
     if p > 2:
         raise HenoiPositionError()
     return STACK_TYPES[p]
+
 
 STACK_TYPES = (StackStart, StackTemp, StackEnd)
 
@@ -317,19 +340,37 @@ def step_posible(step: int, level: int) -> bool:
 
 MoveGen = Generator[Movement, None, None]
 
+bit_length = int.bit_length
+
 
 def _stepfy(expected_moves: list[Movement],
             plate_quantity: int,
             start_index: int) -> MoveGen:
     top_level = plate_quantity-len(expected_moves)-start_index
     for index, move in enumerate(expected_moves, top_level):
-        if move[0] == move[1]:
+        temp_pos, end_pos = move
+        if temp_pos == end_pos:
             continue
         yield move
-        top_f = other(move[0], move[1])
-        top_t = move[1]
-        for step in range(pow(2, index)-1):
-            yield _move(step, index, start_pos=top_f, end_pos=top_t)
+
+        start_pos: Position = (end_pos | temp_pos) ^ 3  # type: ignore
+        if index & 1:
+            temp_pos, end_pos = end_pos, temp_pos
+        states = (
+            Movement(start_pos, temp_pos),
+            Movement(end_pos, start_pos),
+            Movement(temp_pos, end_pos)
+        )
+        states_rev = (
+            Movement(temp_pos, start_pos),
+            Movement(start_pos, end_pos),
+            Movement(end_pos, temp_pos)
+        )
+        for step in range((1 << index)-1):
+            if bit_length(step+1 ^ step) & 1:  # right most 0 position is odd
+                yield states[step % 3]
+            else:
+                yield states_rev[step % 3]
 
 
 def _change_pos(a: Position, b: Position, c: Position, *positions: Position) -> list[Position]:
@@ -343,16 +384,50 @@ def _move(step: int, level: int, *, start_pos: Position = 0, end_pos: Position =
     '''the function solve a henoi move on the step. '''\
         '''odd level are diffrent direction to eve'''
     # pylint: disable=invalid-name
-    level_reverse = level % 2
-    plate_direction = last_zero(step) % 2
-    from_, to = MOVES[step % 3]
-    if level_reverse:
-        from_, to = REVERSE_B_C[from_], REVERSE_B_C[to]
-    if plate_direction:
+    temp_pos = (start_pos | end_pos) ^ 3
+    step_state = step % 3
+    if level & 1:
+        temp_pos, end_pos = end_pos, temp_pos  # type: ignore
+    if not step_state:
+        from_, to = start_pos, temp_pos
+    elif step_state & 1:
+        from_, to = end_pos, start_pos
+    else:
+        from_, to = temp_pos, end_pos
+    if not (step+1 ^ step).bit_length() & 1:  # right most 0 position is odd
         from_, to = to, from_
-    pos_l = _change_pos(start_pos, other(
-        start_pos, end_pos), end_pos, from_, to)
-    return Movement(*pos_l)
+    return Movement(from_, to)  # type: ignore
+
+
+def _moves(level: int, *, start_pos: Position = 0, end_pos: Position = 2) -> MoveGen:
+    '''the function solve a henoi move on the step. '''\
+        '''odd level are diffrent direction to eve'''
+    # pylint: disable=invalid-name
+    temp_pos: Position = (start_pos | end_pos) ^ 3  # type: ignore
+    if level & 1:
+        temp_pos, end_pos = end_pos, temp_pos
+    states = (
+        Movement(start_pos, temp_pos),
+        Movement(end_pos, start_pos),
+        Movement(temp_pos, end_pos)
+    )
+    states_rev = (
+        Movement(temp_pos, start_pos),
+        Movement(start_pos, end_pos),
+        Movement(end_pos, temp_pos)
+    )
+    for step in range((1 << level)-1):
+        if bit_length(step+1 ^ step) & 1:  # right most 0 position is odd
+            yield states[step % 3]
+        else:
+            yield states_rev[step % 3]
+
+
+# def _bin_moves(level: int) -> MoveGen:
+#     '''the function solve a henoi move on the step. '''\
+#         '''odd level are diffrent direction to eve'''
+#     for step, nstep in enumerate(range(1, (1 << level))):
+#         yield Movement((step & nstep) % 3, ((step | nstep)+1) % 3)
 
 
 def _new_tower(step: int, level: int, *, start_pos: Position = 0, end_pos: Position = 2,
@@ -366,15 +441,15 @@ def _new_tower(step: int, level: int, *, start_pos: Position = 0, end_pos: Posit
     plates = [Plate(x) for x in range(level, 0, -1)]
 
     if step == 0:
-        return Tower(StackStart(plates, stack_names[0]),
-                     StackTemp([], stack_names[1]),
-                     StackEnd([], stack_names[2]),
+        return Tower(StackStart(plates, stack_names[0], plates[0]),
+                     StackTemp([], stack_names[1], plates[0]),
+                     StackEnd([], stack_names[2], plates[0]),
                      tower_name)
 
     if level == 1:
-        return Tower(StackStart([], stack_names[0]),
-                     StackTemp([], stack_names[1]),
-                     StackEnd(plates, stack_names[2]),
+        return Tower(StackStart([], stack_names[0], 1),
+                     StackTemp([], stack_names[1], 1),
+                     StackEnd(plates, stack_names[2], 1),
                      tower_name)
 
     step_str = f'{step:b}'.zfill(level+1)
@@ -404,9 +479,9 @@ def _new_tower(step: int, level: int, *, start_pos: Position = 0, end_pos: Posit
         elif char == 2:
             c_add(plate)
 
-    return Tower(StackStart(from_, stack_names[0]),
-                 StackTemp(temp, stack_names[1]),
-                 StackEnd(end, stack_names[2]),
+    return Tower(StackStart(from_, stack_names[0], plates[0]),
+                 StackTemp(temp, stack_names[1], plates[0]),
+                 StackEnd(end, stack_names[2], plates[0]),
                  tower_name)
 
 
@@ -424,7 +499,7 @@ def __test() -> None:
     #     print(move)
     #     state.move(move)
     for i in range(7):
-        print(_move(i,3,start_pos=2,end_pos= 1))
+        print(_move(i, 3, start_pos=2, end_pos=1))
 
 
 if __name__ == '__main__':

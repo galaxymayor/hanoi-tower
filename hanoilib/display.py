@@ -1,7 +1,7 @@
 '''The module contains the class Show to show the tower'''
 from dataclasses import dataclass, field
 from itertools import chain
-from typing import Literal
+from typing import Any, Callable, Literal
 from colorama import Back, Cursor
 from . import HenoiStepOver, Plate, Position, Tower, Movement
 from ._show import Lines, FutureMoves, TowerInfo,\
@@ -31,6 +31,7 @@ class Edit:
     col: int | None
     new: tuple[Movement, bool | None] | Plate | None = None
 
+
 @dataclass(slots=True)
 class TowerEdit(Edit):
     '''The class save a change in the tower'''
@@ -39,6 +40,7 @@ class TowerEdit(Edit):
     col: int
     new: Plate | None = None
 
+
 @dataclass(slots=True)
 class EvalEdit(Edit):
     '''The class save a change in the evaluation'''
@@ -46,6 +48,7 @@ class EvalEdit(Edit):
     row: int | None = field(default=None, init=True)
     col: None = field(default=None, init=False)
     new: tuple[Movement, bool | None] | None = None
+
 
 class Show:
     '''The class contains configurations and methods to save shown tower string and\
@@ -65,11 +68,6 @@ class Show:
         self.tower_editions = []
         self.eval_editions = []
         self.tower_info = TowerInfo.eval_tower_info(tower, configuration.width)
-
-    @property
-    def tower_length(self) -> int:
-        '''Get the length of the tower'''
-        return len(self.__tower.plates_pos)
 
     def get_stack_len(self, pos: Position) -> int:
         '''Get the length of the stack at the position'''
@@ -116,7 +114,7 @@ class Show:
         evaluate_lines = eval_to_lines(
             self.evaluations.known,
             self.evaluations.unknown is None,
-            fix_steps=self.tower_length)
+            fix_steps=self.tower_info[0])
         evaluate_lines.append(
             f'{self.config.border_color}{" "*14}{Back.RESET}')
         evaluate_lines.append('  next steps  ')
@@ -138,7 +136,7 @@ class Show:
             try:
                 next_step = next(self.evaluations)
                 self.edit_tower(next_step)
-                self.__tower.move(next_step)
+                self.__tower._move_without_check(next_step)
                 return
             except StopIteration as exc:
                 raise HenoiStepOver from exc
@@ -147,6 +145,56 @@ class Show:
         else:
             self.eval_editions.append(EvalEdit(0, None))
             raise HenoiStepOver
+
+    def fast_play(self, io_cb: Callable[[str], Any]) -> None:
+        '''Play the tower'''
+        io_cb('\033[s')
+        con = ''.join
+        tower = self.__tower
+        tower_st = tower._stacks
+        poper = tower_st[0].pop, tower_st[1].pop, tower_st[2].pop
+        adder = tower_st[0].append, tower_st[1].append, tower_st[2].append
+        tower_h = self.tower_info[0]
+        unit_w = self.tower_info[1]
+        padx = (pady := self.config.border)*3
+        piller = self.plate_repr[0]
+        if self.tower_info[2]:
+            pxsu = padx+unit_w
+            plate_repr = tuple(x[-i:] for i, x in enumerate(self.plate_repr))
+            piller_repr = tuple(piller[-i:] for i in range(tower_h+1))
+        else:
+            std_unit = unit_w//2
+            pxsu = padx+std_unit+1
+            plate_repr = tuple(x[std_unit-i+1:std_unit+i] for i, x in enumerate(self.plate_repr))
+            piller_repr = tuple(piller[std_unit-i+1:std_unit+i] for i in range(tower_h+1))
+
+        try:
+            if not self.config.eval:
+                th_fix_t = (th_fix_f := tower_h+pady)+1
+                for p_fr, p_to in tower.eval():
+                    plate = poper[p_fr]()
+                    adder[p_to](plate)
+                    io_cb(f'\
+\033[{th_fix_f-len(tower_st[p_fr])};{p_fr*unit_w+pxsu-plate}f{piller_repr[plate]}\
+\033[{th_fix_t-len(tower_st[p_to])};{p_to*unit_w+pxsu-plate}f{plate_repr[plate]}'
+                    )
+            else:
+                for move in self.evaluations:
+                    self.edit_tower(move)
+                    self.edit_evaluation(move)
+                    tower._move_without_check(move)
+                    io_cb(con(chain(
+                        (self._decode_tower_edition(edit)
+                         for edit in self.tower_editions),
+                        (self._decode_evaluation_edition(edit)
+                         for edit in self.eval_editions)
+                    )))
+                    self.eval_editions.clear()
+                    self.tower_editions.clear()
+        finally:
+            self.__tower.update_plates_pos()
+            io_cb('\x1b[0m\033[u')
+            # io_cb(None)
 
     def read_editions(self) -> str:
         '''Read the editions'''
@@ -161,7 +209,7 @@ class Show:
     def edit_tower(self, move: Movement) -> None:
         '''Add an edition'''
         edit = self.tower_editions.append
-        fr_row, to_row = map(lambda p: self.tower_length-self.get_stack_len(p),
+        fr_row, to_row = map(lambda p: self.tower_info[0]-self.get_stack_len(p),
                              move)
         edit(TowerEdit(fr_row, move[0], None))
         edit(TowerEdit(to_row-1, move[1], self.__tower[move[0]][-1]))
@@ -191,39 +239,40 @@ class Show:
         if not self.config.eval:
             return
 
-        ev_len = self.evaluations.calculate_till(self.tower_length+1)
+        ev_len = self.evaluations.calculate_till(self.tower_info[0]+1)
+        known = self.evaluations.known
 
         if not ev_len:
             edit(EvalEdit(0, None))
             return
 
         if ev_len == 1:
-            edit(EvalEdit(0, (self.evaluations.known[0], True)))
+            edit(EvalEdit(0, (known[0], True)))
             edit(EvalEdit(None, None))
             return
 
-        edit(EvalEdit(0, (self.evaluations.known[0], None)))
+        edit(EvalEdit(0, (known[0], None)))
         if state != 1:
-            end = ev_len <= self.tower_length
-            till = min(ev_len, self.tower_length)-1
-            for ev_move in self.evaluations.known[1:till]:
-                edit(EvalEdit(None, (ev_move, None)))
-            edit(EvalEdit(None, (self.evaluations.known[till], end)))
-            if end and ev_len < self.tower_length:
+            end = ev_len <= self.tower_info[0]
+            till = min(ev_len, self.tower_info[0])-1
+            for i in range(1, till):
+                edit(EvalEdit(None, (known[i], None)))
+            # for ev_move in known[1:till]:
+            #     edit(EvalEdit(None, (ev_move, None)))
+            edit(EvalEdit(None, (known[till], end)))
+            if end and ev_len < self.tower_info[0]:
                 edit(EvalEdit(None, None))
 
     def _decode_tower_edition(self, edit: TowerEdit) -> str:
         '''Decode a tower edition'''
         # assert isinstance(value, Plate) or value is None
-        unit_width = self.tower_info.unit_width
-        padx = self.config.border*2
-        pady = self.config.border
-        x_pos = edit.col*unit_width+padx
-        y_pos = edit.row+pady
+        pad = self.config.border
+        x_pos = edit.col*self.tower_info[1]+(pad << 1)+1
+        y_pos = edit.row+pad+1
 
         value = self.plate_repr[edit.new or 0]
 
-        return f'{Cursor.POS(x_pos+1, y_pos+1)}{value}'
+        return STR_AT_T % (y_pos, x_pos, value)
 
     def _decode_evaluation_edition(self, edit: EvalEdit) -> str:
         '''Decode an evaluation edition'''
@@ -248,6 +297,11 @@ class Show:
             plate, info.unit_width, info.half,
             show_plate_level=cfg.show_plate_level,
             plate_color=cfg.plate_color)
-            for plate in range(1, self.tower_length+1)]
+            for plate in range(1, self.tower_info[0]+1)]
         self.plate_repr.insert(0, draw_piller(
             info.unit_width, info.half, piller_color=cfg.piller_color))
+
+
+STR_AT_T = '\033[%d;%dH%s'
+DOUBLE_STR_AT_T = '\033[{};{}H{}\033[{};{}H{}'.format
+# '''Return a string that moves the cursor to the given position and prints the value'''

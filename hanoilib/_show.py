@@ -1,4 +1,5 @@
 '''This module halps you format a Tower'''
+from collections import deque
 from dataclasses import dataclass
 from itertools import chain
 from typing import Iterable, Iterator, Literal
@@ -58,10 +59,10 @@ class Lines(list[str]):
 @dataclass(slots=True)
 class FutureMoves:
     '''A tuple of known Movements and a generator of unknown Movements'''
-    known: list[Movement]
+    known: deque[Movement]
     unknown: MoveGen | None
 
-    def __init__(self, known: list[Movement], unknown: MoveGen | None) -> None:
+    def __init__(self, known: deque[Movement], unknown: MoveGen | None) -> None:
         self.known = known
         self.unknown = unknown
 
@@ -101,7 +102,7 @@ class FutureMoves:
     def __next__(self) -> Movement:
         '''Read the first Movement'''
         if self.known:
-            return self.known.pop(0)
+            return self.known.popleft()
         if not self.unknown:
             raise StopIteration
         try:
@@ -109,6 +110,18 @@ class FutureMoves:
         except StopIteration as exc:
             self.unknown = None
             raise StopIteration from exc
+
+    def reader(self) -> MoveGen:
+        '''Read the Movements'''
+        known, unknown = self.known, self.unknown
+        for _ in range(len(known)):
+            yield known.popleft()
+        if unknown is not None:
+            yield from unknown
+
+    def __iter__(self) -> Iterator[Movement]:
+        '''Iterate the Movements'''
+        return self
 
     def __bool__(self) -> bool:
         '''Check if there is a Movement'''
@@ -197,7 +210,7 @@ def draw_tower(
 
 def evaluate(tower: Tower, steps: int) -> FutureMoves:
     '''Return evaluastion to the steps, and the rest generator'''
-    resault: list[Movement] = []
+    resault: deque[Movement] = deque()
     add_known = resault.append
 
     try:
@@ -211,7 +224,7 @@ def evaluate(tower: Tower, steps: int) -> FutureMoves:
 
 
 def eval_to_lines(
-    evaluations: list[Movement], done: bool = False, *,
+    evaluations: list[Movement] | deque[Movement], done: bool = False, *,
     fix_steps: int | None = None,
     left_wrap: str = ' '*2, right_wrap: str = ' '*6,
     unfinish: str = ' ...  ', finish: str = ' @    '
@@ -220,7 +233,7 @@ def eval_to_lines(
     if not evaluations:
         return Lines([' '*(len(left_wrap+right_wrap)+6)]*(fix_steps or 0))
     resault = Lines(
-        str(m).join((left_wrap, right_wrap)) for m in evaluations[:-1]
+        str(m).join((left_wrap, right_wrap)) for m, _ in zip(evaluations, range((fix_steps or 1)-1))
     )
     resault.append(
         f'{left_wrap}{evaluations[-1]}{finish if done else unfinish}')
@@ -239,14 +252,15 @@ def show_evaluation(
     unit_width = 14
 
     evaluation = evaluate(tower, steps+1)
-    known = evaluation.known
-    eval_gen = evaluation.unknown
-    if eval_gen is None:
-        done = True
-        next_eval = []
-    else:
-        done = False
-        next_eval = known[-1:]
+    done = not evaluation
+    known = list(evaluation.known)
+    # eval_gen = evaluation.unknown
+    # if eval_gen is None:
+    #     done = True
+    #     next_eval = []
+    # else:
+    #     done = False
+    #     next_eval = known[-1:]
     resault = eval_to_lines(known[:min(len(known), steps)],
                             done=done, fix_steps=steps)
     resault.set_width(unit_width)
@@ -254,7 +268,7 @@ def show_evaluation(
     add_line(spliter_color+spliter*unit_width)
     add_line('  next steps  ')
 
-    return resault, FutureMoves(next_eval, eval_gen)
+    return resault, evaluation
 
 # Unit single plate
 
